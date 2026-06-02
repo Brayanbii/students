@@ -28,8 +28,10 @@ WORKDIR /var/www/html
 # 8. Copiar todos los archivos de tu proyecto local al contenedor de Docker
 COPY . /var/www/html/
 
-# 9. Ejecutar composer install ignorando requerimientos de plataforma para evitar bloqueos de bloqueo local
-RUN composer install --no-interaction --optimize-autoloader --ignore-platform-reqs
+# 9. Eliminar composer.lock local (si existe) y correr composer install de forma estricta.
+# Al no ignorar los requisitos de plataforma, Composer detectará la extensión nativa instalada
+# en el paso 4 y descargará la versión de la librería PHP que encaja perfectamente con ella.
+RUN rm -f composer.lock && composer install --no-interaction --optimize-autoloader
 
 # 10. Dar permisos de lectura/escritura a Apache sobre los archivos
 RUN chown -R www-data:www-data /var/www/html
