@@ -28,9 +28,8 @@ WORKDIR /var/www/html
 # 8. Copiar todos los archivos de tu proyecto local al contenedor de Docker
 COPY . /var/www/html/
 
-# 9. Ejecutar composer install para descargar la librería de MongoDB
-# (Como ya tenemos ext-mongodb instalada en la imagen, esto correrá sin errores)
-RUN composer install --no-interaction --optimize-autoloader
+# 9. Ejecutar composer install ignorando requerimientos de plataforma para evitar bloqueos de bloqueo local
+RUN composer install --no-interaction --optimize-autoloader --ignore-platform-reqs
 
 # 10. Dar permisos de lectura/escritura a Apache sobre los archivos
 RUN chown -R www-data:www-data /var/www/html
