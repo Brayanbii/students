@@ -2,7 +2,9 @@
 /**
  * Aplicación de Registro y Sincronización de Estudiantes con Soporte de Imágenes
  * Conectividad dual: PostgreSQL (PDO) y MongoDB Atlas (Composer Driver)
- * Muestra la separación clara: Postgres guarda solo texto; MongoDB guarda texto + imagen Base64
+ * * ¡MEJORAS PRO ADICIONALES INYECTADAS!:
+ * 1. Comparador de Rendimiento en Tiempo Real (Métricas de Latencia de Escritura).
+ * 2. Dashboard Superior de Métricas Avanzadas Cruzadas (Métricas SQL vs NoSQL).
  */
 
 require 'vendor/autoload.php';
@@ -81,6 +83,10 @@ $status_type = null;
 $pg_save_ok = false;
 $mongo_save_ok = false;
 
+// Variables para guardar los microsegundos del Benchmark de escritura
+$pg_time = 0;
+$mongo_time = 0;
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
     $codigo = trim($_POST['codigo'] ?? '');
     $nombre = trim($_POST['nombre'] ?? '');
@@ -94,9 +100,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
         $file_type = $_FILES['documento_img']['type'];
         $file_size = $_FILES['documento_img']['size'];
         
-        // Validar que el archivo sea efectivamente una imagen
         if (strpos($file_type, 'image/') === 0) {
-            // Límite prudente de 4MB para conversión Base64 en este demo
             if ($file_size <= 4 * 1024 * 1024) {
                 $file_data = file_get_contents($file_tmp);
                 $base64_image = 'data:' . $file_type . ';base64,' . base64_encode($file_data);
@@ -113,13 +117,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
         $status_type = "error";
     }
 
-    // Continuar si pasó la validación del archivo
     if ($status_type !== 'error') {
         if (empty($codigo) || empty($nombre) || empty($email) || empty($programa)) {
             $status_message = "Todos los campos de texto son de carácter obligatorio.";
             $status_type = "error";
         } else {
-            // 1. Guardar en PostgreSQL (Estructurado sin imagen, optimizando espacio)
+            // MEJORA 1: Medición de velocidad en PostgreSQL
             if ($pg_connected && $pdo) {
                 try {
                     $stmt_check = $pdo->prepare("SELECT COUNT(*) FROM estudiantes WHERE codigo = ?");
@@ -128,15 +131,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
                         throw new Exception("El código de estudiante ya existe en PostgreSQL.");
                     }
 
+                    $start_time = microtime(true); // Inicio de reloj SQL
                     $stmt = $pdo->prepare("INSERT INTO estudiantes (codigo, nombre, email, programa) VALUES (?, ?, ?, ?)");
                     $stmt->execute([$codigo, $nombre, $email, $programa]);
+                    $pg_time = round(microtime(true) - $start_time, 5); // Fin de reloj SQL
+                    
                     $pg_save_ok = true;
                 } catch (Exception $e) {
                     $pg_error = "Error al insertar en PostgreSQL: " . $e->getMessage();
                 }
             }
 
-            // 2. Guardar en MongoDB Atlas (Documental con imagen en Base64)
+            // MEJORA 1: Medición de velocidad en MongoDB Atlas
             if ($mongo_connected && $mongo_collection) {
                 try {
                     $exists = $mongo_collection->findOne(['codigo' => $codigo]);
@@ -144,14 +150,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
                         throw new Exception("El código de estudiante ya existe en MongoDB.");
                     }
 
+                    $start_time = microtime(true); // Inicio de reloj NoSQL
                     $insertResult = $mongo_collection->insertOne([
                         'codigo' => $codigo,
                         'nombre' => $nombre,
                         'email' => $email,
                         'programa' => $programa,
-                        'documento_base64' => $base64_image, // Imagen guardada como string codificado!
+                        'documento_base64' => $base64_image, 
                         'fecha_respaldo' => new UTCDateTime()
                     ]);
+                    $mongo_time = round(microtime(true) - $start_time, 5); // Fin de reloj NoSQL
                     
                     if ($insertResult->getInsertedCount() > 0) {
                         $mongo_save_ok = true;
@@ -161,18 +169,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
                 }
             }
 
-            // Evaluación de Sincronización
+            // Evaluación de Sincronización + Inyección de Métricas de Rendimiento
             if ($pg_save_ok && $mongo_save_ok) {
-                $status_message = "¡Sincronización Exitosa! El estudiante fue registrado en PostgreSQL (SQL) y su respaldo con documento gráfico se almacenó en MongoDB Atlas (NoSQL).";
+                $status_message = "<strong>¡Sincronización Exitosa!</strong> El estudiante fue registrado en PostgreSQL y su respaldo con imagen Base64 se guardó en MongoDB Atlas.<br>";
+                $status_message .= "<div class='mt-2 p-1.5 bg-white/70 rounded border border-emerald-300 font-mono text-[11px] text-emerald-800 flex justify-between gap-2'>";
+                $status_message .= "<span>⏱️ Latencia SQL: <strong>{$pg_time} s</strong></span>";
+                $status_message .= "<span>⏱️ Latencia NoSQL (Con Foto): <strong>{$mongo_time} s</strong></span>";
+                $status_message .= "</div>";
                 $status_type = "success";
             } elseif ($pg_save_ok && !$mongo_save_ok) {
-                $status_message = "Registro parcial: Guardado en PostgreSQL, pero falló el respaldo con imagen en MongoDB Atlas. Detalle: " . htmlspecialchars($mongo_error);
+                $status_message = "Registro parcial: Guardado en PostgreSQL ({$pg_time} s), pero falló el respaldo en MongoDB Atlas. Detalle: " . htmlspecialchars($mongo_error);
                 $status_type = "warning";
             } elseif (!$pg_save_ok && $mongo_save_ok) {
-                $status_message = "Registro parcial: Guardado en MongoDB Atlas con su imagen, pero falló el registro relacional en PostgreSQL. Detalle: " . htmlspecialchars($pg_error);
+                $status_message = "Registro parcial: Guardado en MongoDB Atlas ({$mongo_time} s), pero falló el relacional en PostgreSQL. Detalle: " . htmlspecialchars($pg_error);
                 $status_type = "warning";
             } else {
-                $status_message = "Error general: No se pudo registrar la información en ningún motor de base de datos.";
+                $status_message = "Error general: No se pudo registrar en ningún motor.";
                 $status_type = "error";
             }
         }
@@ -201,13 +213,33 @@ if ($mongo_connected && $mongo_collection) {
         $mongo_error = "Error al consultar MongoDB: " . $e->getMessage();
     }
 }
+
+// --- MEJORA 2: CÁLCULOS DINÁMICOS PARA EL DASHBOARD SUPERIOR ---
+$total_estudiantes = count($estudiantes_pg);
+
+// Determinar el programa con mayor demanda analizando la columna de SQL
+$top_programa = "Ninguno";
+if ($total_estudiantes > 0) {
+    $programas_array = array_column($estudiantes_pg, 'programa');
+    $conteo_programas = array_count_values($programas_array);
+    arsort($conteo_programas);
+    $top_programa = array_key_first($conteo_programas);
+}
+
+// Contar cuántas imágenes multimedia válidas se custodian en el motor documental NoSQL
+$total_documentos_nosql = 0;
+foreach ($estudiantes_mongo as $doc) {
+    if (!empty($doc['documento_base64'])) {
+        $total_documentos_nosql++;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sincronizador Estudiantil: PostgreSQL & MongoDB con Imágenes</title>
+    <title>Sincronizador Avanzado: Arquitectura Híbrida Estudiantil</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -216,18 +248,17 @@ if ($mongo_connected && $mongo_collection) {
 </head>
 <body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col">
 
-    <!-- Header -->
-    <header class="bg-gradient-to-r from-blue-700 to-indigo-800 text-white shadow-md">
+    <header class="bg-gradient-to-r from-slate-900 via-indigo-950 to-blue-900 text-white shadow-md">
         <div class="max-w-7xl mx-auto px-4 py-5 flex flex-col sm:flex-row items-center justify-between gap-4">
             <div class="flex items-center gap-3">
                 <div class="p-2.5 bg-white/10 rounded-lg">
-                    <svg class="w-8 h-8 text-blue-200" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                    <svg class="w-8 h-8 text-indigo-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
                     </svg>
                 </div>
                 <div>
-                    <h1 class="text-xl font-bold tracking-tight">Sincronizador Multimotor Estudiantil</h1>
-                    <p class="text-xs text-blue-100">Separación de Datos: Postgres (Relacional Ligero) • MongoDB (BSON + Imágenes)</p>
+                    <h1 class="text-xl font-bold tracking-tight">Sincronizador Avanzado Multimotor</h1>
+                    <p class="text-xs text-indigo-200">Panel Creativo: Persistencia Políglota y Benchmarking de Rendimiento</p>
                 </div>
             </div>
             
@@ -244,189 +275,216 @@ if ($mongo_connected && $mongo_collection) {
         </div>
     </header>
 
-    <!-- Contenido Principal -->
-    <main class="flex-grow max-w-7xl w-full mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
-
-        <!-- Formulario de Registro (Columna Izquierda) -->
-        <div class="lg:col-span-1">
-            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 sticky top-6">
-                <h2 class="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2 border-b border-slate-100 pb-3">
-                    <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
+    <main class="flex-grow max-w-7xl w-full mx-auto px-4 py-8">
+        
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Matrícula Total (Postgres)</p>
+                    <h3 class="text-2xl font-bold text-slate-800 mt-1"><?php echo $total_estudiantes; ?> <span class="text-xs font-normal text-slate-500">Filas Relacionales</span></h3>
+                </div>
+                <div class="p-3 bg-blue-50 text-blue-600 rounded-lg">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/>
                     </svg>
-                    Registrar Estudiante
-                </h2>
+                </div>
+            </div>
 
-                <!-- Tarjetas de estado / Mensajes de Respuesta -->
-                <?php if ($status_message): ?>
-                    <div class="mb-5 p-4 rounded-lg text-sm border <?php 
-                        if ($status_type === 'success') echo 'bg-emerald-50 border-emerald-200 text-emerald-800';
-                        elseif ($status_type === 'warning') echo 'bg-amber-50 border-amber-200 text-amber-800';
-                        else echo 'bg-rose-50 border-rose-200 text-rose-800';
-                    ?>">
-                        <?php echo $status_message; ?>
-                    </div>
-                <?php endif; ?>
+            <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Programa Mayor Demanda</p>
+                    <h3 class="text-lg font-bold text-indigo-950 mt-2 truncate max-w-[200px]" title="<?php echo htmlspecialchars($top_programa); ?>">
+                        <?php echo htmlspecialchars($top_programa); ?>
+                    </h3>
+                </div>
+                <div class="p-3 bg-indigo-50 text-indigo-600 rounded-lg">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.232.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.232.477-4.5 1.253"/>
+                    </svg>
+                </div>
+            </div>
 
-                <!-- Formulario habilitado para archivos binarios -->
-                <form method="POST" action="" enctype="multipart/form-data" class="space-y-4">
-                    <div>
-                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Código Estudiante *</label>
-                        <input type="text" name="codigo" required placeholder="Ej: EST-2026-05" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Nombre Completo *</label>
-                        <input type="text" name="nombre" required placeholder="Ej: Brayan Mendoza" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Correo Electrónico *</label>
-                        <input type="email" name="email" required placeholder="Ej: brayan@universidad.com" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Programa Académico *</label>
-                        <input type="text" name="programa" required placeholder="Ej: Ingeniería de Software" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
-                    </div>
-                    
-                    <!-- Carga de Archivo (Cédula o Diploma) -->
-                    <div>
-                        <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Foto Documento (Cédula/Diploma) *</label>
-                        <input type="file" name="documento_img" accept="image/*" required class="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 border border-slate-300 rounded-lg p-1 bg-white cursor-pointer">
-                        <p class="text-[10px] text-slate-400 mt-1">Sube una foto JPG/PNG nítida de hasta 4MB.</p>
-                    </div>
-
-                    <button type="submit" name="registrar" class="w-full bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white font-semibold py-2 px-4 rounded-lg shadow-sm transition-all text-sm flex items-center justify-center gap-2 mt-2">
-                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-                        </svg>
-                        Guardar & Sincronizar
-                    </button>
-                </form>
+            <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Custodia Multimedia (Atlas)</p>
+                    <h3 class="text-2xl font-bold text-emerald-700 mt-1"><?php echo $total_documentos_nosql; ?> <span class="text-xs font-normal text-slate-500">Imágenes Base64</span></h3>
+                </div>
+                <div class="p-3 bg-emerald-50 text-emerald-600 rounded-lg">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+                    </svg>
+                </div>
             </div>
         </div>
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <div class="lg:col-span-1">
+                <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 sticky top-6">
+                    <h2 class="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2 border-b border-slate-100 pb-3">
+                        <svg class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
+                        </svg>
+                        Registrar Estudiante
+                    </h2>
 
-        <!-- Vista de Datos en Paralelo (Columna Derecha / Centro) -->
-        <div class="lg:col-span-2 space-y-8">
-            
-            <!-- Listado 1: PostgreSQL (Relacional - Estricto y Ligero) -->
-            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                <h2 class="text-lg font-bold text-slate-900 mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
-                    <span class="flex items-center gap-2">
-                        <span class="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
-                        Listado PostgreSQL (SQL Estructurado - Sin Imágenes)
-                    </span>
-                    <span class="text-xs font-semibold bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
-                        <?php echo count($estudiantes_pg); ?> registros
-                    </span>
-                </h2>
+                    <?php if ($status_message): ?>
+                        <div class="mb-5 p-4 rounded-lg text-sm border <?php 
+                            if ($status_type === 'success') echo 'bg-emerald-50 border-emerald-200 text-emerald-800';
+                            elseif ($status_type === 'warning') echo 'bg-amber-50 border-amber-200 text-amber-800';
+                            else echo 'bg-rose-50 border-rose-200 text-rose-800';
+                        ?>">
+                            <?php echo $status_message; ?>
+                        </div>
+                    <?php endif; ?>
 
-                <?php if (empty($estudiantes_pg)): ?>
-                    <div class="text-center py-8 text-slate-400 text-sm">
-                        No hay estudiantes registrados en PostgreSQL.
-                    </div>
-                <?php else: ?>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-left text-sm border-collapse">
-                            <thead>
-                                <tr class="border-b border-slate-200 text-slate-400 text-xs uppercase tracking-wider font-semibold">
-                                    <th class="py-3 px-2">Código</th>
-                                    <th class="py-3 px-2">Nombre</th>
-                                    <th class="py-3 px-2">Email</th>
-                                    <th class="py-3 px-2">Programa</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-slate-100 text-slate-700">
-                                <?php foreach ($estudiantes_pg as $est): ?>
-                                    <tr class="hover:bg-slate-50/50 transition-colors">
-                                        <td class="py-3 px-2 font-mono text-xs font-bold text-slate-900"><?php echo htmlspecialchars($est['codigo']); ?></td>
-                                        <td class="py-3 px-2 font-medium"><?php echo htmlspecialchars($est['nombre']); ?></td>
-                                        <td class="py-3 px-2 text-slate-500"><?php echo htmlspecialchars($est['email']); ?></td>
-                                        <td class="py-3 px-2 text-xs"><span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded"><?php echo htmlspecialchars($est['programa']); ?></span></td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                <?php endif; ?>
+                    <form method="POST" action="" enctype="multipart/form-data" class="space-y-4">
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Código Estudiante *</label>
+                            <input type="text" name="codigo" required placeholder="Ej: EST-2026-05" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Nombre Completo *</label>
+                            <input type="text" name="nombre" required placeholder="Ej: Brayan Mendoza" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Correo Electrónico *</label>
+                            <input type="email" name="email" required placeholder="Ej: brayan@universidad.com" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Programa Académico *</label>
+                            <input type="text" name="programa" required placeholder="Ej: Ingeniería de Software" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm">
+                        </div>
+                        
+                        <div>
+                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Foto Documento (Cédula/Diploma) *</label>
+                            <input type="file" name="documento_img" accept="image/*" required class="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 border border-slate-300 rounded-lg p-1 bg-white cursor-pointer">
+                            <p class="text-[10px] text-slate-400 mt-1">Sube una foto JPG/PNG nítida de hasta 4MB.</p>
+                        </div>
+
+                        <button type="submit" name="registrar" class="w-full bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white font-semibold py-2 px-4 rounded-lg shadow-sm transition-all text-sm flex items-center justify-center gap-2 mt-2">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                            </svg>
+                            Guardar & Sincronizar
+                        </button>
+                    </form>
+                </div>
             </div>
 
-            <!-- Listado 2: MongoDB Atlas (Documental - Almacena las imágenes pesadas en Base64) -->
-            <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
-                <h2 class="text-lg font-bold text-slate-900 mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
-                    <span class="flex items-center gap-2">
-                        <span class="w-2.5 h-2.5 rounded-full bg-emerald-600"></span>
-                        Listado MongoDB Atlas (NoSQL - Con Imagen Base64)
-                    </span>
-                    <span class="text-xs font-semibold bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full">
-                        <?php echo count($estudiantes_mongo); ?> documentos
-                    </span>
-                </h2>
+            <div class="lg:col-span-2 space-y-8">
+                
+                <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                    <h2 class="text-lg font-bold text-slate-900 mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
+                        <span class="flex items-center gap-2">
+                            <span class="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
+                            Listado PostgreSQL (SQL Estructurado - Sin Imágenes)
+                        </span>
+                        <span class="text-xs font-semibold bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full">
+                            <?php echo count($estudiantes_pg); ?> registros
+                        </span>
+                    </h2>
 
-                <?php if (empty($estudiantes_mongo)): ?>
-                    <div class="text-center py-8 text-slate-400 text-sm">
-                        No hay documentos respaldados en MongoDB Atlas.
-                    </div>
-                <?php else: ?>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-left text-sm border-collapse">
-                            <thead>
-                                <tr class="border-b border-slate-200 text-slate-400 text-xs uppercase tracking-wider font-semibold">
-                                    <th class="py-3 px-2">Código</th>
-                                    <th class="py-3 px-2">Nombre</th>
-                                    <th class="py-3 px-2">Documento de Respaldo</th>
-                                    <th class="py-3 px-2">Metadatos BSON</th>
-                                </tr>
-                            </thead>
-                            <tbody class="divide-y divide-slate-100 text-slate-700">
-                                <?php foreach ($estudiantes_mongo as $doc): ?>
-                                    <tr class="hover:bg-slate-50/50 transition-colors">
-                                        <td class="py-3 px-2 font-mono text-xs font-bold text-slate-900"><?php echo htmlspecialchars($doc['codigo'] ?? ''); ?></td>
-                                        <td class="py-3 px-2 font-medium"><?php echo htmlspecialchars($doc['nombre'] ?? ''); ?></td>
-                                        
-                                        <!-- Columna del Visor Gráfico con Miniatura, Ojo y Texto -->
-                                        <td class="py-3 px-2">
-                                            <?php if (!empty($doc['documento_base64'])): ?>
-                                                <div class="flex items-center gap-3">
-                                                    <!-- Miniatura -->
-                                                    <img src="<?php echo $doc['documento_base64']; ?>" 
-                                                         class="w-10 h-10 object-cover rounded-lg border border-slate-200 shadow-sm cursor-pointer hover:ring-2 hover:ring-indigo-500 transition-all"
-                                                         onclick="abrirVisor('<?php echo $doc['documento_base64']; ?>', '<?php echo htmlspecialchars($doc['nombre'] ?? ''); ?>')">
-                                                    
-                                                    <!-- Botón de Ojo interactivo "Ver imagen" -->
-                                                    <button onclick="abrirVisor('<?php echo $doc['documento_base64']; ?>', '<?php echo htmlspecialchars($doc['nombre'] ?? ''); ?>')"
-                                                            class="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-semibold bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1.5 rounded-lg transition-all shadow-sm">
-                                                        <!-- Icono del Ojo SVG -->
-                                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
-                                                        </svg>
-                                                        Ver imagen
-                                                    </button>
+                    <?php if (empty($estudiantes_pg)): ?>
+                        <div class="text-center py-8 text-slate-400 text-sm">
+                            No hay estudiantes registrados en PostgreSQL.
+                        </div>
+                    <?php else: ?>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left text-sm border-collapse">
+                                <thead>
+                                    <tr class="border-b border-slate-200 text-slate-400 text-xs uppercase tracking-wider font-semibold">
+                                        <th class="py-3 px-2">Código</th>
+                                        <th class="py-3 px-2">Nombre</th>
+                                        <th class="py-3 px-2">Email</th>
+                                        <th class="py-3 px-2">Programa</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100 text-slate-700">
+                                    <?php foreach ($estudiantes_pg as $est): ?>
+                                        <tr class="hover:bg-slate-50/50 transition-colors">
+                                            <td class="py-3 px-2 font-mono text-xs font-bold text-slate-900"><?php echo htmlspecialchars($est['codigo']); ?></td>
+                                            <td class="py-3 px-2 font-medium"><?php echo htmlspecialchars($est['nombre']); ?></td>
+                                            <td class="py-3 px-2 text-slate-500"><?php echo htmlspecialchars($est['email']); ?></td>
+                                            <td class="py-3 px-2 text-xs"><span class="bg-slate-100 text-slate-600 px-2 py-0.5 rounded"><?php echo htmlspecialchars($est['programa']); ?></span></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                    <h2 class="text-lg font-bold text-slate-900 mb-4 flex items-center justify-between border-b border-slate-100 pb-3">
+                        <span class="flex items-center gap-2">
+                            <span class="w-2.5 h-2.5 rounded-full bg-emerald-600"></span>
+                            Listado MongoDB Atlas (NoSQL - Con Imagen Base64)
+                        </span>
+                        <span class="text-xs font-semibold bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full">
+                            <?php echo count($estudiantes_mongo); ?> documentos
+                        </span>
+                    </h2>
+
+                    <?php if (empty($estudiantes_mongo)): ?>
+                        <div class="text-center py-8 text-slate-400 text-sm">
+                            No hay documentos respaldados en MongoDB Atlas.
+                        </div>
+                    <?php else: ?>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left text-sm border-collapse">
+                                <thead>
+                                    <tr class="border-b border-slate-200 text-slate-400 text-xs uppercase tracking-wider font-semibold">
+                                        <th class="py-3 px-2">Código</th>
+                                        <th class="py-3 px-2">Nombre</th>
+                                        <th class="py-3 px-2">Documento de Respaldo</th>
+                                        <th class="py-3 px-2">Metadatos BSON</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100 text-slate-700">
+                                    <?php foreach ($estudiantes_mongo as $doc): ?>
+                                        <tr class="hover:bg-slate-50/50 transition-colors">
+                                            <td class="py-3 px-2 font-mono text-xs font-bold text-slate-900"><?php echo htmlspecialchars($doc['codigo'] ?? ''); ?></td>
+                                            <td class="py-3 px-2 font-medium"><?php echo htmlspecialchars($doc['nombre'] ?? ''); ?></td>
+                                            
+                                            <td class="py-3 px-2">
+                                                <?php if (!empty($doc['documento_base64'])): ?>
+                                                    <div class="flex items-center gap-3">
+                                                        <img src="<?php echo $doc['documento_base64']; ?>" 
+                                                             class="w-10 h-10 object-cover rounded-lg border border-slate-200 shadow-sm cursor-pointer hover:ring-2 hover:ring-indigo-500 transition-all"
+                                                             onclick="abrirVisor('<?php echo $doc['documento_base64']; ?>', '<?php echo htmlspecialchars($doc['nombre'] ?? ''); ?>')">
+                                                        
+                                                        <button onclick="abrirVisor('<?php echo $doc['documento_base64']; ?>', '<?php echo htmlspecialchars($doc['nombre'] ?? ''); ?>')"
+                                                                class="inline-flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 font-semibold bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1.5 rounded-lg transition-all shadow-sm">
+                                                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/>
+                                                            </svg>
+                                                            Ver imagen
+                                                        </button>
+                                                    </div>
+                                                <?php else: ?>
+                                                    <span class="text-xs text-slate-400 italic">Sin documento cargado</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            
+                                            <td class="py-3 px-2">
+                                                <div class="text-[9px] bg-emerald-50 text-emerald-800 p-1.5 rounded-lg font-mono max-w-xs truncate" title="Objeto BSON completo">
+                                                    { id: "<?php echo (string)$doc['_id']; ?>", has_image: <?php echo !empty($doc['documento_base64']) ? 'true' : 'false'; ?> }
                                                 </div>
-                                            <?php else: ?>
-                                                <span class="text-xs text-slate-400 italic">Sin documento cargado</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        
-                                        <td class="py-3 px-2">
-                                            <div class="text-[9px] bg-emerald-50 text-emerald-800 p-1.5 rounded-lg font-mono max-w-xs truncate" title="Objeto BSON completo">
-                                                { id: "<?php echo (string)$doc['_id']; ?>", has_image: <?php echo !empty($doc['documento_base64']) ? 'true' : 'false'; ?> }
-                                            </div>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                <?php endif; ?>
-            </div>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    <?php endif; ?>
+                </div>
 
+            </div>
         </div>
     </main>
 
-    <!-- VISOR MODAL PREMIUM PARA DOCUMENTOS (CÉDULA O DIPLOMA) -->
     <div id="imageModal" class="hidden fixed inset-0 bg-slate-900/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
         <div class="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl relative animate-in fade-in duration-200">
-            <!-- Botón de Cerrar -->
             <button onclick="cerrarVisor()" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1.5 rounded-full hover:bg-slate-100 transition-all">
                 <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
@@ -441,7 +499,6 @@ if ($mongo_connected && $mongo_collection) {
         </div>
     </div>
 
-    <!-- Footer -->
     <footer class="bg-slate-900 text-slate-400 py-6 mt-12 border-t border-slate-800 text-xs">
         <div class="max-w-7xl mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-4">
             <div>
@@ -458,7 +515,6 @@ if ($mongo_connected && $mongo_collection) {
         </div>
     </footer>
 
-    <!-- SCRIPT DE CONTROL PARA EL MODAL -->
     <script>
         function abrirVisor(base64Data, nombreEstudiante) {
             document.getElementById('modalImg').src = base64Data;
@@ -471,7 +527,6 @@ if ($mongo_connected && $mongo_collection) {
             document.getElementById('modalImg').src = "";
         }
         
-        // Cerrar modal al hacer clic en las zonas externas oscuras
         window.onclick = function(event) {
             const modal = document.getElementById('imageModal');
             if (event.target == modal) {
