@@ -36,5 +36,13 @@ RUN rm -f composer.lock && composer install --no-interaction --optimize-autoload
 # 10. Asignar los permisos correctos de lectura y escritura al servidor web (Apache)
 RUN chown -R www-data:www-data /var/www/html
 
+# ---------------------------------------------------------------------------------
+# CAMBIO CLAVE: Configurar PHP para que acepte fotos pesadas de celulares (Hasta 20MB)
+# Esto soluciona el aviso amarillo que decía que el archivo era obligatorio.
+# ---------------------------------------------------------------------------------
+RUN echo "upload_max_filesize = 20M" > /usr/local/etc/php/conf.d/uploads.ini \
+    && echo "post_max_size = 20M" >> /usr/local/etc/php/conf.d/uploads.ini
+# ---------------------------------------------------------------------------------
+
 # 11. Indicar que el contenedor escuchará en el puerto 80 estándar
 EXPOSE 80
