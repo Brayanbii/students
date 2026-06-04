@@ -2,9 +2,8 @@
 /**
  * Aplicación de Registro y Sincronización de Estudiantes con Soporte de Imágenes
  * Conectividad dual: PostgreSQL (PDO) y MongoDB Atlas (Composer Driver)
- * * ¡MEJORAS PRO ADICIONALES INYECTADAS!:
- * 1. Comparador de Rendimiento en Tiempo Real (Métricas de Latencia de Escritura).
- * 2. Dashboard Superior de Métricas Avanzadas Cruzadas (Métricas SQL vs NoSQL).
+ * * MODIFICACIÓN ULTRA-ROBUSTA: Acepta cualquier tipo de archivo de imagen,
+ * tamaño, nombres sin restricciones ni excepciones.
  */
 
 require 'vendor/autoload.php';
@@ -64,7 +63,7 @@ try {
             throw new Exception("La extensión PHP 'mongodb' no está instalada o cargada.");
         }
         $mongo_client = new Client($mongo_uri);
-        $mongo_client->listDatabases(); // Test de conexión rápida
+        $mongo_client->listDatabases(); 
         
         $mongo_collection = $mongo_client->selectCollection($mongo_db_name, 'estudiantes');
         $mongo_connected = true;
@@ -83,7 +82,6 @@ $status_type = null;
 $pg_save_ok = false;
 $mongo_save_ok = false;
 
-// Variables para guardar los microsegundos del Benchmark de escritura
 $pg_time = 0;
 $mongo_time = 0;
 
@@ -94,26 +92,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
     $programa = trim($_POST['programa'] ?? '');
     $base64_image = null;
 
-    // Procesar la imagen subida (Cédula o Diploma)
+    // LÓGICA DE PROCESAMIENTO TOTAL: Cero filtros restrictivos de extensión o tamaño
     if (isset($_FILES['documento_img']) && $_FILES['documento_img']['error'] === UPLOAD_ERR_OK) {
         $file_tmp = $_FILES['documento_img']['tmp_name'];
         $file_type = $_FILES['documento_img']['type'];
-        $file_size = $_FILES['documento_img']['size'];
         
-        if (strpos($file_type, 'image/') === 0) {
-            if ($file_size <= 4 * 1024 * 1024) {
-                $file_data = file_get_contents($file_tmp);
-                $base64_image = 'data:' . $file_type . ';base64,' . base64_encode($file_data);
-            } else {
-                $status_message = "La imagen supera el tamaño máximo permitido (4MB).";
-                $status_type = "error";
-            }
+        // Si por fallos del navegador no detecta el MIME-type, forzamos uno genérico seguro
+        if (empty($file_type)) {
+            $file_type = 'image/jpeg';
+        }
+        
+        // Leemos cualquier flujo binario sin importar el peso o nombre original
+        $file_data = @file_get_contents($file_tmp);
+        if ($file_data !== false) {
+            $base64_image = 'data:' . $file_type . ';base64,' . base64_encode($file_data);
         } else {
-            $status_message = "El archivo debe ser una imagen válida (PNG, JPG, JPEG).";
+            $status_message = "Error al procesar la lectura del archivo adjunto.";
             $status_type = "error";
         }
     } else {
-        $status_message = "Es obligatorio adjuntar un documento (Cédula o Diploma).";
+        // Clasificación de errores del servidor para guiar al usuario sin bloquearlo
+        $upload_error = $_FILES['documento_img']['error'] ?? UPLOAD_ERR_NO_FILE;
+        switch ($upload_error) {
+            case UPLOAD_ERR_INI_SIZE:
+            case UPLOAD_ERR_FORM_SIZE:
+                $status_message = "El archivo supera la capacidad máxima del servidor (100MB). Elige una foto más ligera.";
+                break;
+            case UPLOAD_ERR_NO_FILE:
+                $status_message = "Es obligatorio seleccionar un archivo de imagen para el documento.";
+                break;
+            default:
+                $status_message = "No se pudo cargar el archivo correctamente (Código de error PHP: " . $upload_error . ").";
+                break;
+        }
         $status_type = "error";
     }
 
@@ -122,7 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
             $status_message = "Todos los campos de texto son de carácter obligatorio.";
             $status_type = "error";
         } else {
-            // MEJORA 1: Medición de velocidad en PostgreSQL
+            // 1. Guardar en PostgreSQL
             if ($pg_connected && $pdo) {
                 try {
                     $stmt_check = $pdo->prepare("SELECT COUNT(*) FROM estudiantes WHERE codigo = ?");
@@ -131,10 +142,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
                         throw new Exception("El código de estudiante ya existe en PostgreSQL.");
                     }
 
-                    $start_time = microtime(true); // Inicio de reloj SQL
+                    $start_time = microtime(true);
+                    $stmt = $pdo->prepare("INSERT INTO estudiantes (codigo, nombre, email, programme) VALUES (?, ?, ?, ?)");
+                    // NOTA: Ajusta a 'programme' o 'programa' según se llame tu columna exacta de PostgreSQL
                     $stmt = $pdo->prepare("INSERT INTO estudiantes (codigo, nombre, email, programa) VALUES (?, ?, ?, ?)");
                     $stmt->execute([$codigo, $nombre, $email, $programa]);
-                    $pg_time = round(microtime(true) - $start_time, 5); // Fin de reloj SQL
+                    $pg_time = round(microtime(true) - $start_time, 5); 
                     
                     $pg_save_ok = true;
                 } catch (Exception $e) {
@@ -142,7 +155,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
                 }
             }
 
-            // MEJORA 1: Medición de velocidad en MongoDB Atlas
+            // 2. Guardar en MongoDB Atlas
             if ($mongo_connected && $mongo_collection) {
                 try {
                     $exists = $mongo_collection->findOne(['codigo' => $codigo]);
@@ -150,7 +163,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
                         throw new Exception("El código de estudiante ya existe en MongoDB.");
                     }
 
-                    $start_time = microtime(true); // Inicio de reloj NoSQL
+                    $start_time = microtime(true);
                     $insertResult = $mongo_collection->insertOne([
                         'codigo' => $codigo,
                         'nombre' => $nombre,
@@ -159,7 +172,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
                         'documento_base64' => $base64_image, 
                         'fecha_respaldo' => new UTCDateTime()
                     ]);
-                    $mongo_time = round(microtime(true) - $start_time, 5); // Fin de reloj NoSQL
+                    $mongo_time = round(microtime(true) - $start_time, 5); 
                     
                     if ($insertResult->getInsertedCount() > 0) {
                         $mongo_save_ok = true;
@@ -169,22 +182,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
                 }
             }
 
-            // Evaluación de Sincronización + Inyección de Métricas de Rendimiento
+            // Evaluación de Sincronización + Benchmark
             if ($pg_save_ok && $mongo_save_ok) {
-                $status_message = "<strong>¡Sincronización Exitosa!</strong> El estudiante fue registrado en PostgreSQL y su respaldo con imagen Base64 se guardó en MongoDB Atlas.<br>";
+                $status_message = "<strong>¡Sincronización Exitosa!</strong> El estudiante fue registrado en PostgreSQL y su respaldo multimedia sin restricciones se guardó en MongoDB Atlas.<br>";
                 $status_message .= "<div class='mt-2 p-1.5 bg-white/70 rounded border border-emerald-300 font-mono text-[11px] text-emerald-800 flex justify-between gap-2'>";
                 $status_message .= "<span>⏱️ Latencia SQL: <strong>{$pg_time} s</strong></span>";
-                $status_message .= "<span>⏱️ Latencia NoSQL (Con Foto): <strong>{$mongo_time} s</strong></span>";
+                $status_message .= "<span>⏱️ Latencia NoSQL (Con Archivo): <strong>{$mongo_time} s</strong></span>";
                 $status_message .= "</div>";
                 $status_type = "success";
             } elseif ($pg_save_ok && !$mongo_save_ok) {
-                $status_message = "Registro parcial: Guardado en PostgreSQL ({$pg_time} s), pero falló el respaldo en MongoDB Atlas. Detalle: " . htmlspecialchars($mongo_error);
+                $status_message = "Registro parcial: Guardado en PostgreSQL ({$pg_time} s), pero falló el respaldo multimedia en MongoDB Atlas. Detalle: " . htmlspecialchars($mongo_error);
                 $status_type = "warning";
             } elseif (!$pg_save_ok && $mongo_save_ok) {
                 $status_message = "Registro parcial: Guardado en MongoDB Atlas ({$mongo_time} s), pero falló el relacional en PostgreSQL. Detalle: " . htmlspecialchars($pg_error);
                 $status_type = "warning";
             } else {
-                $status_message = "Error general: No se pudo registrar en ningún motor.";
+                $status_message = "Error general: No se pudo registrar en ningún motor de base de datos.";
                 $status_type = "error";
             }
         }
@@ -214,10 +227,8 @@ if ($mongo_connected && $mongo_collection) {
     }
 }
 
-// --- MEJORA 2: CÁLCULOS DINÁMICOS PARA EL DASHBOARD SUPERIOR ---
+// Cálculos para Dashboard
 $total_estudiantes = count($estudiantes_pg);
-
-// Determinar el programa con mayor demanda analizando la columna de SQL
 $top_programa = "Ninguno";
 if ($total_estudiantes > 0) {
     $programas_array = array_column($estudiantes_pg, 'programa');
@@ -226,7 +237,6 @@ if ($total_estudiantes > 0) {
     $top_programa = array_key_first($conteo_programas);
 }
 
-// Contar cuántas imágenes multimedia válidas se custodian en el motor documental NoSQL
 $total_documentos_nosql = 0;
 foreach ($estudiantes_mongo as $doc) {
     if (!empty($doc['documento_base64'])) {
@@ -258,7 +268,7 @@ foreach ($estudiantes_mongo as $doc) {
                 </div>
                 <div>
                     <h1 class="text-xl font-bold tracking-tight">Sincronizador Avanzado Multimotor</h1>
-                    <p class="text-xs text-indigo-200">Panel Creativo: Persistencia Políglota y Benchmarking de Rendimiento</p>
+                    <p class="text-xs text-indigo-200">Panel Completo: Tolerancia a Fallos Multimedia y Benchmarking Remoto</p>
                 </div>
             </div>
             
@@ -281,7 +291,7 @@ foreach ($estudiantes_mongo as $doc) {
             <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between">
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Matrícula Total (Postgres)</p>
-                    <h3 class="text-2xl font-bold text-slate-800 mt-1"><?php echo $total_estudiantes; ?> <span class="text-xs font-normal text-slate-500">Filas Relacionales</span></h3>
+                    <h3 class="text-2xl font-bold text-slate-800 mt-1"><?php echo $total_estudiantes; ?> <span class="text-xs font-normal text-slate-500">Filas SQL</span></h3>
                 </div>
                 <div class="p-3 bg-blue-50 text-blue-600 rounded-lg">
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -293,7 +303,7 @@ foreach ($estudiantes_mongo as $doc) {
             <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between">
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Programa Mayor Demanda</p>
-                    <h3 class="text-lg font-bold text-indigo-950 mt-2 truncate max-w-[200px]" title="<?php echo htmlspecialchars($top_programa); ?>">
+                    <h3 class="text-sm font-bold text-indigo-950 mt-2 truncate max-w-[200px]" title="<?php echo htmlspecialchars($top_programa); ?>">
                         <?php echo htmlspecialchars($top_programa); ?>
                     </h3>
                 </div>
@@ -307,7 +317,7 @@ foreach ($estudiantes_mongo as $doc) {
             <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200 flex items-center justify-between">
                 <div>
                     <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Custodia Multimedia (Atlas)</p>
-                    <h3 class="text-2xl font-bold text-emerald-700 mt-1"><?php echo $total_documentos_nosql; ?> <span class="text-xs font-normal text-slate-500">Imágenes Base64</span></h3>
+                    <h3 class="text-2xl font-bold text-emerald-700 mt-1"><?php echo $total_documentos_nosql; ?> <span class="text-xs font-normal text-slate-500">Documentos BSON</span></h3>
                 </div>
                 <div class="p-3 bg-emerald-50 text-emerald-600 rounded-lg">
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -316,6 +326,7 @@ foreach ($estudiantes_mongo as $doc) {
                 </div>
             </div>
         </div>
+
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div class="lg:col-span-1">
                 <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-6 sticky top-6">
@@ -355,9 +366,9 @@ foreach ($estudiantes_mongo as $doc) {
                         </div>
                         
                         <div>
-                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Foto Documento (Cédula/Diploma) *</label>
-                            <input type="file" name="documento_img" accept="image/*" required class="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 border border-slate-300 rounded-lg p-1 bg-white cursor-pointer">
-                            <p class="text-[10px] text-slate-400 mt-1">Sube una foto JPG/PNG nítida de hasta 4MB.</p>
+                            <label class="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Foto Documento (Cualquier Formato/Tamaño) *</label>
+                            <input type="file" name="documento_img" accept="image/*,application/pdf" required class="w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 border border-slate-300 rounded-lg p-1 bg-white cursor-pointer">
+                            <p class="text-[10px] text-slate-400 mt-1">Soporta fotos masivas e imágenes móviles sin restricciones.</p>
                         </div>
 
                         <button type="submit" name="registrar" class="w-full bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white font-semibold py-2 px-4 rounded-lg shadow-sm transition-all text-sm flex items-center justify-center gap-2 mt-2">
