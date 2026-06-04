@@ -2,8 +2,11 @@
 /**
  * Aplicación de Registro y Sincronización de Estudiantes con Soporte de Imágenes
  * Conectividad dual: PostgreSQL (PDO) y MongoDB Atlas (Composer Driver)
- * * COMPRESIÓN Y OPTIMIZACIÓN AL 1000% - CORREGIDO PARA PHP 8.2 (Sin avisos Float-to-Int)
+ * * PATRÓN PRG IMPLEMENTADO: Evita el reenvío de formularios y errores rojos al dar F5/Refresh.
  */
+
+// Iniciamos la sesión en la primera línea para transportar los mensajes seguros en las redirecciones
+session_start();
 
 require 'vendor/autoload.php';
 
@@ -62,7 +65,7 @@ try {
     $mongo_error = $e->getMessage();
 }
 
-// FUNCIÓN MAESTRA DE OPTIMIZACIÓN: Convierte a enteros limpios para evitar Deprecations
+// FUNCIÓN MAESTRA DE OPTIMIZACIÓN Y ESCALADO GRÁFICO
 function optimizarYComprimirImagen($rutaTemporal, $maxAnchoAlto = 700) {
     list($anchoOriginal, $altoOriginal, $tipoImagen) = @getimagesize($rutaTemporal);
     if (!$anchoOriginal || !$altoOriginal) {
@@ -94,9 +97,7 @@ function optimizarYComprimirImagen($rutaTemporal, $maxAnchoAlto = 700) {
         $nuevoAlto = (int)$altoOriginal;
     }
 
-    // Lienzo con enteros estrictos garantizados
     $lienzoDestino = imagecreatetruecolor($nuevoAncho, $nuevoAlto);
-    
     imagealphablending($lienzoDestino, false);
     imagesavealpha($lienzoDestino, true);
 
@@ -114,34 +115,35 @@ function optimizarYComprimirImagen($rutaTemporal, $maxAnchoAlto = 700) {
 
 // --- 2. PROCESAMIENTO DEL FORMULARIO DE REGISTRO (POST) ---
 
-$status_message = null;
-$status_type = null; 
-$pg_save_ok = false;
-$mongo_save_ok = false;
-$pg_time = 0;
-$mongo_time = 0;
-
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
     $codigo = trim($_POST['codigo'] ?? '');
     $nombre = trim($_POST['nombre'] ?? '');
     $email = trim($_POST['email'] ?? '');
     $programa = trim($_POST['programa'] ?? '');
     $base64_image = null;
+    
+    $file_error_detected = false;
 
     if (isset($_FILES['documento_img']) && $_FILES['documento_img']['error'] === UPLOAD_ERR_OK) {
         $file_tmp = $_FILES['documento_img']['tmp_name'];
         $binarioOptimizado = optimizarYComprimirImagen($file_tmp);
         $base64_image = 'data:image/jpeg;base64,' . base64_encode($binarioOptimizado);
     } else {
-        $status_message = "Es obligatorio adjuntar un archivo de imagen válido.";
-        $status_type = "error";
+        $_SESSION['status_message'] = "Es obligatorio adjuntar un archivo de imagen válido.";
+        $_SESSION['status_type'] = "error";
+        $file_error_detected = true;
     }
 
-    if ($status_type !== 'error') {
+    if (!$file_error_detected) {
         if (empty($codigo) || empty($nombre) || empty($email) || empty($programa)) {
-            $status_message = "Todos los campos de texto son de carácter obligatorio.";
-            $status_type = "error";
+            $_SESSION['status_message'] = "Todos los campos de texto son de carácter obligatorio.";
+            $_SESSION['status_type'] = "error";
         } else {
+            $pg_save_ok = false;
+            $mongo_save_ok = false;
+            $pg_time = 0;
+            $mongo_time = 0;
+
             // 1. Guardar en PostgreSQL
             if ($pg_connected && $pdo) {
                 try {
@@ -188,19 +190,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
             }
 
             if ($pg_save_ok && $mongo_save_ok) {
-                $status_message = "<strong>¡Sincronización Exitosa!</strong> Registro guardado de forma optimizada (Imagen comprimida con éxito).<br>";
-                $status_message .= "<div class='mt-2 p-1.5 bg-white/70 rounded border border-emerald-300 font-mono text-[11px] text-emerald-800 flex justify-between gap-2'>";
-                $status_message .= "<span>⏱️ Latencia SQL: <strong>{$pg_time} s</strong></span>";
-                $status_message .= "<span>⏱️ Latencia NoSQL (Optimizado): <strong>{$mongo_time} s</strong></span>";
-                $status_message .= "</div>";
-                $status_type = "success";
+                $_SESSION['status_message'] = "<strong>¡Sincronización Exitosa!</strong> Registro guardado de forma optimizada (Imagen comprimida con éxito).<br>";
+                $_SESSION['status_message'] .= "<div class='mt-2 p-1.5 bg-white/70 rounded border border-emerald-300 font-mono text-[11px] text-emerald-800 flex justify-between gap-2'>";
+                $_SESSION['status_message'] .= "<span>⏱️ Latencia SQL: <strong>{$pg_time} s</strong></span>";
+                $_SESSION['status_message'] .= "<span>⏱️ Latencia NoSQL (Optimizado): <strong>{$mongo_time} s</strong></span>";
+                $_SESSION['status_message'] .= "</div>";
+                $_SESSION['status_type'] = "success";
             } else {
-                $status_message = "Error en la persistencia políglota: " . htmlspecialchars($pg_error ?: $mongo_error);
-                $status_type = "error";
+                $_SESSION['status_message'] = "Error en la persistencia políglota: " . htmlspecialchars($pg_error ?: $mongo_error);
+                $_SESSION['status_type'] = "error";
             }
         }
     }
+
+    // REDIRECCIÓN MAESTRA PRG: Limpia los datos de envío para que el F5 no rompa nada
+    header("Location: " . $_SERVER['PHP_SELF']);
+    exit;
 }
+
+// Recuperar los mensajes de estado guardados en la sesión transitoria
+$status_message = $_SESSION['status_message'] ?? null;
+$status_type = $_SESSION['status_type'] ?? null;
+
+// Los destruimos inmediatamente para que no se repitan al actualizar
+unset($_SESSION['status_message']);
+unset($_SESSION['status_type']);
+
 
 // --- 3. CONSULTA DE LISTADOS ---
 $estudiantes_pg = [];
