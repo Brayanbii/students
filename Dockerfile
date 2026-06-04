@@ -37,11 +37,13 @@ RUN rm -f composer.lock && composer install --no-interaction --optimize-autoload
 RUN chown -R www-data:www-data /var/www/html
 
 # ---------------------------------------------------------------------------------
-# CAMBIO CLAVE: Configurar PHP para que acepte fotos pesadas de celulares (Hasta 20MB)
-# Esto soluciona el aviso amarillo que decía que el archivo era obligatorio.
+# CAMBIO ANTIBALAS: Llevar la capacidad del servidor al máximo para soportar fotos gigantes
+# Acepta archivos de 100M, sube la RAM a 512M y expande el tiempo límite a 5 minutos.
 # ---------------------------------------------------------------------------------
-RUN echo "upload_max_filesize = 20M" > /usr/local/etc/php/conf.d/uploads.ini \
-    && echo "post_max_size = 20M" >> /usr/local/etc/php/conf.d/uploads.ini
+RUN echo "upload_max_filesize = 100M" > /usr/local/etc/php/conf.d/uploads.ini \
+    && echo "post_max_size = 100M" >> /usr/local/etc/php/conf.d/uploads.ini \
+    && echo "memory_limit = 512M" >> /usr/local/etc/php/conf.d/uploads.ini \
+    && echo "max_execution_time = 300" >> /usr/local/etc/php/conf.d/uploads.ini
 # ---------------------------------------------------------------------------------
 
 # 11. Indicar que el contenedor escuchará en el puerto 80 estándar
