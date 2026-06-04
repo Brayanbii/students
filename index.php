@@ -2,8 +2,7 @@
 /**
  * Aplicación de Registro y Sincronización de Estudiantes con Soporte de Imágenes
  * Conectividad dual: PostgreSQL (PDO) y MongoDB Atlas (Composer Driver)
- * * COMPRESIÓN Y OPTIMIZACIÓN AL 1000%: Resizing gráfico en caliente mediante GD.
- * Reduce imágenes de 8MB a menos de 70KB automáticamente antes de enviar a Atlas.
+ * * COMPRESIÓN Y OPTIMIZACIÓN AL 1000% - CORREGIDO PARA PHP 8.2 (Sin avisos Float-to-Int)
  */
 
 require 'vendor/autoload.php';
@@ -63,14 +62,13 @@ try {
     $mongo_error = $e->getMessage();
 }
 
-// FUNCIÓN MAESTRA DE OPTIMIZACIÓN: Comprime y achica las dimensiones de la foto
+// FUNCIÓN MAESTRA DE OPTIMIZACIÓN: Convierte a enteros limpios para evitar Deprecations
 function optimizarYComprimirImagen($rutaTemporal, $maxAnchoAlto = 700) {
     list($anchoOriginal, $altoOriginal, $tipoImagen) = @getimagesize($rutaTemporal);
     if (!$anchoOriginal || !$altoOriginal) {
-        return file_get_contents($rutaTemporal); // Fallback de emergencia si no es procesable
+        return file_get_contents($rutaTemporal); 
     }
 
-    // Crear el lienzo correspondiente según el formato subido
     switch ($tipoImagen) {
         case IMAGETYPE_JPEG: $lienzoOriginal = @imagecreatefromjpeg($rutaTemporal); break;
         case IMAGETYPE_PNG:  $lienzoOriginal = @imagecreatefrompng($rutaTemporal); break;
@@ -82,36 +80,32 @@ function optimizarYComprimirImagen($rutaTemporal, $maxAnchoAlto = 700) {
         return file_get_contents($rutaTemporal);
     }
 
-    // Calcular proporciones óptimas para no distorsionar la cédula/diploma
     $proporcion = $anchoOriginal / $altoOriginal;
     if ($anchoOriginal > $maxAnchoAlto || $altoOriginal > $maxAnchoAlto) {
         if ($proporcion > 1) {
-            $nuevoAncho = $maxAnchoAlto;
-            $nuevoAlto = $maxAnchoAlto / $proporcion;
+            $nuevoAncho = (int)$maxAnchoAlto;
+            $nuevoAlto = (int)round($maxAnchoAlto / $proporcion);
         } else {
-            $nuevoAlto = $maxAnchoAlto;
-            $nuevoAncho = $maxAnchoAlto * $proporcion;
+            $nuevoAlto = (int)$maxAnchoAlto;
+            $nuevoAncho = (int)round($maxAnchoAlto * $proporcion);
         }
     } else {
-        $nuevoAncho = $anchoOriginal;
-        $nuevoAlto = $altoOriginal;
+        $nuevoAncho = (int)$anchoOriginal;
+        $nuevoAlto = (int)$altoOriginal;
     }
 
-    // Renderizar la nueva miniatura ligera
+    // Lienzo con enteros estrictos garantizados
     $lienzoDestino = imagecreatetruecolor($nuevoAncho, $nuevoAlto);
     
-    // Mantener transparencias si aplican
     imagealphablending($lienzoDestino, false);
     imagesavealpha($lienzoDestino, true);
 
     imagecopyresampled($lienzoDestino, $lienzoOriginal, 0, 0, 0, 0, $nuevoAncho, $nuevoAlto, $anchoOriginal, $altoOriginal);
 
-    // Guardar en el buffer de salida comprimiendo drásticamente a formato JPEG (Calidad 60%)
     ob_start();
     imagejpeg($lienzoDestino, null, 60); 
     $datosComprimidos = ob_get_clean();
 
-    // Liberar memoria RAM del servidor
     imagedestroy($lienzoOriginal);
     imagedestroy($lienzoDestino);
 
@@ -136,8 +130,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['registrar'])) {
 
     if (isset($_FILES['documento_img']) && $_FILES['documento_img']['error'] === UPLOAD_ERR_OK) {
         $file_tmp = $_FILES['documento_img']['tmp_name'];
-        
-        // Ejecutar nuestra función de compresión extrema en caliente
         $binarioOptimizado = optimizarYComprimirImagen($file_tmp);
         $base64_image = 'data:image/jpeg;base64,' . base64_encode($binarioOptimizado);
     } else {
